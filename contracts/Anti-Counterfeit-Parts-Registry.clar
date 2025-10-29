@@ -7,6 +7,8 @@
 (define-constant ERR_INVALID_SERIAL (err u105))
 (define-constant ERR_TRANSFER_FAILED (err u106))
 (define-constant ERR_ALREADY_VERIFIED (err u107))
+(define-constant ERR_WARRANTY_EXPIRED (err u108))
+(define-constant ERR_INVALID_WARRANTY_PERIOD (err u109))
 
 (define-data-var next-part-id uint u1)
 (define-data-var total-parts uint u0)
@@ -22,7 +24,8 @@
     is-authentic: bool,
     verification-count: uint,
     last-verification: uint,
-    metadata: (string-ascii 100)
+    metadata: (string-ascii 100),
+    warranty-expiry: uint
 })
 
 (define-map manufacturers principal {
@@ -77,7 +80,8 @@
             is-authentic: true,
             verification-count: u1,
             last-verification: stacks-block-height,
-            metadata: metadata
+            metadata: metadata,
+            warranty-expiry: u0
         })
         
         (map-set serial-to-part-id serial-number part-id)
@@ -286,6 +290,55 @@
                     (get is-authentic part-data)
                 )
             })
+        )
+        ERR_PART_NOT_FOUND
+    )
+)
+
+(define-public (set-part-warranty (part-id uint) (warranty-blocks uint))
+    (let (
+        (part-data (unwrap! (map-get? parts part-id) ERR_PART_NOT_FOUND))
+        (part-manufacturer (get manufacturer part-data))
+    )
+        (asserts! (is-eq tx-sender part-manufacturer) ERR_UNAUTHORIZED)
+        (asserts! (> warranty-blocks u0) ERR_INVALID_WARRANTY_PERIOD)
+        
+        (map-set parts part-id 
+            (merge part-data {
+                warranty-expiry: (+ stacks-block-height warranty-blocks)
+            })
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (get-warranty-status (part-id uint))
+    (match (map-get? parts part-id)
+        part-data 
+        (let (
+            (warranty-expiry (get warranty-expiry part-data))
+            (current-height stacks-block-height)
+        )
+            (ok {
+                warranty-expiry: warranty-expiry,
+                is-under-warranty: (and (> warranty-expiry u0) (>= warranty-expiry current-height)),
+                blocks-remaining: (if (and (> warranty-expiry u0) (>= warranty-expiry current-height)) 
+                    (- warranty-expiry current-height) 
+                    u0
+                )
+            })
+        )
+        ERR_PART_NOT_FOUND
+    )
+)
+
+(define-read-only (is-warranty-valid (part-id uint))
+    (match (map-get? parts part-id)
+        part-data 
+        (let (
+            (warranty-expiry (get warranty-expiry part-data))
+        )
+            (ok (and (> warranty-expiry u0) (>= warranty-expiry stacks-block-height)))
         )
         ERR_PART_NOT_FOUND
     )
